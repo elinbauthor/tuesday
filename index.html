@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Tuesday — Drive spike</title>
+<style>
+  :root {
+    --ground:#EEF3FA; --card:#FFFFFF; --ink:#10263C; --muted:#5E7180;
+    --rule:#CBD9E7; --signal:#2C79C9; --ok:#1D7A55; --warn:#A33F2D;
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; background:var(--ground); color:var(--ink);
+    font:15px/1.55 "Inter","Helvetica Neue",Arial,sans-serif;
+    padding:0 0 60px;
+  }
+  .wrap { max-width:720px; margin:0 auto; padding:0 18px; }
+  h1 { font-family:"Avenir Next","Nunito","Segoe UI",system-ui,sans-serif;
+       font-weight:800; letter-spacing:-0.025em; font-size:26px; margin:26px 0 4px; }
+  h2 { font-family:"Avenir Next","Nunito","Segoe UI",system-ui,sans-serif;
+       font-weight:700; font-size:17px; margin:26px 0 8px; }
+  p, li { color:var(--muted); }
+  p.lead { color:var(--ink); }
+  ol { padding-left:20px; }
+  code { background:#fff; border:1px solid var(--rule); padding:1px 5px;
+         font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace; font-size:12px; }
+  .card { background:var(--card); border:1px solid var(--rule); padding:16px; margin:14px 0; }
+  label { display:block; font-size:11px; letter-spacing:.09em; text-transform:uppercase;
+          color:var(--muted); margin-bottom:6px; }
+  input {
+    width:100%; font:inherit; font-size:13px; padding:10px;
+    border:1px solid var(--rule); background:#fff; color:var(--ink);
+    font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  }
+  .row { display:flex; gap:10px; flex-wrap:wrap; margin-top:12px; }
+  button {
+    font:inherit; font-size:14px; padding:11px 16px; border:none; border-radius:2px;
+    background:var(--signal); color:#fff; cursor:pointer;
+  }
+  button.ghost { background:none; color:var(--signal); border:1px solid var(--rule); }
+  button:disabled { background:var(--rule); color:var(--muted); cursor:not-allowed; }
+  #log {
+    background:#0E1F30; color:#D7E6F5; padding:14px; margin-top:16px;
+    font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    font-size:12px; line-height:1.5; white-space:pre-wrap; word-break:break-word;
+    min-height:180px; max-height:52vh; overflow:auto;
+  }
+  .ok { color:#7FD8B0; }
+  .bad { color:#FF9B8A; }
+  .dim { color:#7B93A8; }
+  .verdict { display:flex; gap:10px; align-items:baseline; padding:10px 0;
+             border-bottom:1px solid var(--rule); font-size:14px; }
+  .verdict b { flex:0 0 26px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Tuesday — Drive spike</h1>
+<p class="lead">Answers one question: can a static page on your phone sign into Google Drive,
+write your wardrobe there, and read it back? Nothing here touches the real app.</p>
+
+<h2>Setup, once</h2>
+<ol>
+  <li>Host this file on a real origin. GitHub Pages is easiest — a public repo, this file as
+      <code>index.html</code>, Pages enabled. A <code>file://</code> path will not work.</li>
+  <li>In Google Cloud Console, create a project, then
+      <b>APIs &amp; Services → Library</b> and enable <b>Google Drive API</b>.</li>
+  <li><b>OAuth consent screen</b> → External → add yourself as a test user.</li>
+  <li><b>Credentials → Create credentials → OAuth client ID → Web application.</b>
+      Under <b>Authorised JavaScript origins</b> add your Pages origin exactly,
+      e.g. <code>https://yourname.github.io</code> — origin only, no path, no trailing slash.</li>
+  <li>Copy the client ID below and run the tests, first on your laptop, then on your phone.</li>
+</ol>
+
+<div class="card">
+  <label for="cid">OAuth client ID</label>
+  <input id="cid" placeholder="1234567890-abcdefg.apps.googleusercontent.com" autocomplete="off" />
+  <div class="row">
+    <button id="signin">1 · Sign in</button>
+    <button id="silent" class="ghost">2 · Silent re-auth</button>
+    <button id="write" class="ghost">3 · Write</button>
+    <button id="read" class="ghost">4 · Read back</button>
+    <button id="big" class="ghost">5 · Write 2 MB</button>
+    <button id="update" class="ghost">6 · Update in place</button>
+  </div>
+  <div class="row">
+    <button id="runall">Run all in order</button>
+    <button id="clear" class="ghost">Clear log</button>
+  </div>
+</div>
+
+<div id="verdicts"></div>
+<div id="log"></div>
+
+<h2>What each test is for</h2>
+<div class="verdict"><b>1</b><span>Consent works at all on this device and browser. On iOS this is where popup blocking usually bites.</span></div>
+<div class="verdict"><b>2</b><span>Whether you re-consent every session. Tokens last about an hour; silent renewal is what makes daily use bearable.</span></div>
+<div class="verdict"><b>3</b><span>A write happens and Drive returns a file id.</span></div>
+<div class="verdict"><b>4</b><span>The bytes come back identical. Round-trip integrity, not just a 200 response.</span></div>
+<div class="verdict"><b>5</b><span>Timing at roughly the size of your thumbnails. If this is slow on mobile data, the design changes.</span></div>
+<div class="verdict"><b>6</b><span>Updating an existing file rather than piling up duplicates — how every save after the first will work.</span></div>
+
+<h2>Then the awkward one</h2>
+<p>Once all six pass in the browser, use <b>Share → Add to Home Screen</b>, open Tuesday from
+the icon, and run them again. iOS standalone mode has historically had its own problems with
+OAuth popups and a separate storage context. If it passes in Safari and fails from the icon,
+that is the finding — and it is better found now.</p>
+
+<h2>Scope note</h2>
+<p>This asks for <code>drive.file</code> only, which grants access to files this app creates
+and nothing else in your Drive. It cannot read your other documents.</p>
+
+</div>
+
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script>
+const FILE_NAME = "tuesday-spike.json";
+const SCOPE = "https://www.googleapis.com/auth/drive.file";
+const logEl = document.getElementById("log");
+const cidEl = document.getElementById("cid");
+
+let tokenClient = null;
+let accessToken = null;
+let tokenAt = 0;
+let fileId = null;
+let lastPayload = null;
+
+try {
+  const saved = localStorage.getItem("tuesday.spike.cid");
+  if (saved) cidEl.value = saved;
+} catch (e) { /* private mode */ }
+cidEl.addEventListener("change", () => {
+  try { localStorage.setItem("tuesday.spike.cid", cidEl.value.trim()); } catch (e) {}
+  tokenClient = null;
+});
+
+function log(msg, cls) {
+  const t = new Date().toTimeString().slice(0, 8);
+  const span = document.createElement("span");
+  if (cls) span.className = cls;
+  span.textContent = `[${t}] ${msg}\n`;
+  logEl.appendChild(span);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+const ok = (m) => log("PASS  " + m, "ok");
+const bad = (m) => log("FAIL  " + m, "bad");
+const dim = (m) => log(m, "dim");
+
+function ensureClient() {
+  if (tokenClient) return true;
+  const cid = cidEl.value.trim();
+  if (!cid) { bad("No client ID entered."); return false; }
+  if (!window.google || !google.accounts || !google.accounts.oauth2) {
+    bad("Google Identity Services did not load. Check the network, or an extension blocking accounts.google.com.");
+    return false;
+  }
+  tokenClient = google.accounts.oauth2.initTokenClient({
+    client_id: cid,
+    scope: SCOPE,
+    callback: () => {},
+  });
+  return true;
+}
+
+function getToken(silent) {
+  return new Promise((resolve, reject) => {
+    if (!ensureClient()) return reject(new Error("client not ready"));
+    tokenClient.callback = (resp) => {
+      if (resp.error) return reject(new Error(resp.error + (resp.error_description ? " — " + resp.error_description : "")));
+      accessToken = resp.access_token;
+      tokenAt = Date.now();
+      resolve(resp);
+    };
+    try {
+      tokenClient.requestAccessToken(silent ? { prompt: "" } : { prompt: "consent" });
+    } catch (e) { reject(e); }
+  });
+}
+
+async function drive(url, opts) {
+  const res = await fetch(url, {
+    ...opts,
+    headers: { Authorization: "Bearer " + accessToken, ...((opts && opts.headers) || {}) },
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(res.status + " " + body.slice(0, 300));
+  }
+  return res;
+}
+
+async function findFile() {
+  const q = encodeURIComponent(`name='${FILE_NAME}' and trashed=false`);
+  const res = await drive(
+    `https://www.googleapis.com/drive/v3/files?q=${q}&spaces=drive&fields=files(id,name,size)`
+  );
+  const data = await res.json();
+  return data.files && data.files[0] ? data.files[0] : null;
+}
+
+async function upload(payload, id) {
+  const body = new FormData();
+  if (!id) {
+    body.append(
+      "metadata",
+      new Blob([JSON.stringify({ name: FILE_NAME, mimeType: "application/json" })], {
+        type: "application/json",
+      })
+    );
+  }
+  body.append("file", new Blob([JSON.stringify(payload)], { type: "application/json" }));
+  const url = id
+    ? `https://www.googleapis.com/upload/drive/v3/files/${id}?uploadType=multipart&fields=id,size`
+    : `https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,size`;
+  const res = await drive(url, { method: id ? "PATCH" : "POST", body });
+  return res.json();
+}
+
+/* ---- tests ---- */
+
+async function t1() {
+  log("1 · Sign in …");
+  try {
+    await getToken(false);
+    ok(`consent granted, token received (${accessToken.length} chars)`);
+    return true;
+  } catch (e) {
+    bad("sign in — " + e.message);
+    dim("If nothing appeared, a popup was blocked. Allow popups for this site and retry.");
+    return false;
+  }
+}
+
+async function t2() {
+  log("2 · Silent re-auth …");
+  try {
+    const before = accessToken;
+    await getToken(true);
+    ok(accessToken === before
+      ? "silent call returned the existing token"
+      : "silent call issued a fresh token with no prompt");
+    dim("Tokens last about an hour. If this passes, daily use needs no re-consent.");
+    return true;
+  } catch (e) {
+    bad("silent re-auth — " + e.message);
+    dim("Not fatal, but you would re-consent every session, which is a real cost.");
+    return false;
+  }
+}
+
+async function t3() {
+  log("3 · Write …");
+  try {
+    lastPayload = {
+      marker: "tuesday-spike",
+      at: new Date().toISOString(),
+      garments: Array.from({ length: 20 }, (_, i) => ({ id: "g" + i, name: "test " + i })),
+    };
+    const existing = await findFile();
+    const out = await upload(lastPayload, existing ? existing.id : null);
+    fileId = out.id;
+    ok(`wrote ${FILE_NAME}, id ${fileId}`);
+    return true;
+  } catch (e) {
+    bad("write — " + e.message);
+    return false;
+  }
+}
+
+async function t4() {
+  log("4 · Read back …");
+  try {
+    if (!fileId) {
+      const f = await findFile();
+      if (!f) throw new Error("no file found to read");
+      fileId = f.id;
+    }
+    const res = await drive(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`);
+    const back = await res.json();
+    const same = JSON.stringify(back) === JSON.stringify(lastPayload);
+    if (same) ok("round trip identical");
+    else bad("round trip differs from what was written");
+    return same;
+  } catch (e) {
+    bad("read — " + e.message);
+    return false;
+  }
+}
+
+async function t5() {
+  log("5 · Write 2 MB …");
+  try {
+    const chunk = "x".repeat(1024);
+    const payload = { blob: Array.from({ length: 2048 }, () => chunk) };
+    const started = performance.now();
+    const existing = await findFile();
+    const out = await upload(payload, existing ? existing.id : null);
+    const secs = ((performance.now() - started) / 1000).toFixed(1);
+    ok(`2 MB written in ${secs}s (reported size ${out.size || "unknown"})`);
+    dim("Thumbnails are about 10 MB in total, so multiply by five for a full first sync.");
+    lastPayload = payload;
+    fileId = out.id;
+    return true;
+  } catch (e) {
+    bad("2 MB write — " + e.message);
+    return false;
+  }
+}
+
+async function t6() {
+  log("6 · Update in place …");
+  try {
+    const f = await findFile();
+    if (!f) throw new Error("no existing file to update");
+    lastPayload = { marker: "tuesday-spike", updatedAt: new Date().toISOString() };
+    const out = await upload(lastPayload, f.id);
+    const after = await findFile();
+    if (out.id === f.id && after && after.id === f.id) {
+      ok("updated in place, no duplicate created");
+      fileId = f.id;
+      return true;
+    }
+    bad("update created a new file instead of replacing");
+    return false;
+  } catch (e) {
+    bad("update — " + e.message);
+    return false;
+  }
+}
+
+document.getElementById("signin").onclick = t1;
+document.getElementById("silent").onclick = t2;
+document.getElementById("write").onclick = t3;
+document.getElementById("read").onclick = t4;
+document.getElementById("big").onclick = t5;
+document.getElementById("update").onclick = t6;
+document.getElementById("clear").onclick = () => { logEl.textContent = ""; };
+
+document.getElementById("runall").onclick = async () => {
+  logEl.textContent = "";
+  dim(`origin ${location.origin}`);
+  dim(`ua ${navigator.userAgent}`);
+  dim(navigator.standalone === true ? "running from home screen (standalone)" : "running in a browser tab");
+  dim("");
+  const results = [];
+  results.push(await t1());
+  if (results[0]) {
+    results.push(await t2());
+    results.push(await t3());
+    results.push(await t4());
+    results.push(await t5());
+    results.push(await t6());
+  }
+  const passed = results.filter(Boolean).length;
+  dim("");
+  log(`${passed} of 6 passed`, passed === 6 ? "ok" : "bad");
+  if (passed === 6) dim("Architecture is sound. Next: add to home screen and run this again.");
+};
+</script>
+</body>
+</html>
