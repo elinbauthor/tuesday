@@ -1,13 +1,25 @@
 /* Tuesday — offline shell.
 
-   Caches the app files and the CDN scripts so the icon opens without a
-   network. The wardrobe itself lives in IndexedDB and was never online.
+   Caches the app's own files so the icon opens without a network. The wardrobe
+   lives in IndexedDB and was never online.
 
-   Strategy: network first for app.jsx and index.html so an update is picked
-   up as soon as it exists, cache first for everything else because React and
-   Babel are pinned to exact versions and never change. */
+   Scope discipline: this worker handles GET requests for this origin and the
+   three pinned CDN scripts, and nothing else. Everything else — API calls,
+   uploads, anything cross-origin — passes straight through untouched.
 
-const CACHE = "tuesday-v1";
+   An earlier version intercepted every request, which meant a failed API call
+   surfaced as "FetchEvent.respondWith received an error" instead of the actual
+   error. A worker that wraps requests it cannot serve turns useful failures
+   into useless ones. */
+
+const CACHE = "tuesday-v2";
+
+const CDN = [
+  "https://unpkg.com/react@18.3.1/umd/react.production.min.js",
+  "https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js",
+  "https://unpkg.com/@babel/standalone@7.24.7/babel.min.js",
+];
+
 const SHELL = [
   "./",
   "./index.html",
@@ -17,47 +29,61 @@ const SHELL = [
   "./tuesday-icon-180.png",
   "./tuesday-icon-192.png",
   "./tuesday-icon-512.png",
-  "https://unpkg.com/react@18.3.1/umd/react.production.min.js",
-  "https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js",
-  "https://unpkg.com/@babel/standalone@7.24.7/babel.min.js",
+  ...CDN,
 ];
 
 self.addEventListener("install", (e) => {
   e.waitUntil(
-    caches.open(CACHE).then((c) =>
-      Promise.allSettled(SHELL.map((u) => c.add(u)))
-    ).then(() => self.skipWaiting())
+    caches
+      .open(CACHE)
+      .then((c) => Promise.allSettled(SHELL.map((u) => c.add(u))))
+      .then(() => self.skipWaiting())
   );
 });
 
 self.addEventListener("activate", (e) => {
   e.waitUntil(
-    caches.keys()
+    caches
+      .keys()
       .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
       .then(() => self.clients.claim())
   );
 });
 
 self.addEventListener("fetch", (e) => {
-  const url = new URL(e.request.url);
-  const fresh = url.pathname.endsWith("/app.jsx") ||
-                url.pathname.endsWith("/index.html") ||
-                url.pathname.endsWith("/");
+  const req = e.request;
 
-  if (fresh) {
+  /* Anything that is not a plain GET is none of this worker's business. */
+  if (req.method !== "GET") return;
+
+  const url = new URL(req.url);
+  const sameOrigin = url.origin === self.location.origin;
+  const isPinnedCdn = CDN.includes(url.href);
+  if (!sameOrigin && !isPinnedCdn) return;
+
+  /* App files network-first so an update lands on reload; pinned CDN scripts
+     cache-first because they are versioned and never change. */
+  const isAppFile =
+    sameOrigin &&
+    (url.pathname.endsWith("/app.jsx") ||
+      url.pathname.endsWith("/index.html") ||
+      url.pathname.endsWith("/storage.js") ||
+      url.pathname.endsWith("/"));
+
+  if (isAppFile) {
     e.respondWith(
-      fetch(e.request)
+      fetch(req)
         .then((res) => {
           const copy = res.clone();
-          caches.open(CACHE).then((c) => c.put(e.request, copy));
+          caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {});
           return res;
         })
-        .catch(() => caches.match(e.request).then((r) => r || caches.match("./index.html")))
+        .catch(() => caches.match(req).then((r) => r || caches.match("./index.html")))
     );
     return;
   }
 
   e.respondWith(
-    caches.match(e.request).then((hit) => hit || fetch(e.request))
+    caches.match(req).then((hit) => hit || fetch(req))
   );
 });
