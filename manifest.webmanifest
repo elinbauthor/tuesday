@@ -1,0 +1,16 @@
+{
+  "name": "Tuesday",
+  "short_name": "Tuesday",
+  "description": "Wear the clothes you already own.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#EEF3FA",
+  "theme_color": "#378ADD",
+  "icons": [
+    { "src": "tuesday-icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "tuesday-icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "tuesday-icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
