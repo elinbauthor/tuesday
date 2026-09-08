@@ -467,14 +467,30 @@ function resize(img, maxEdge, quality) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function tagGarment(base64) {
+const APIKEY_KEY = "tuesday:apikey";
+
+/* Two runtimes, one call.
+
+   Inside the Claude artifact the runtime injects credentials, so the request
+   must carry none. On a plain web page it needs a key, the API version, and
+   an explicit opt-in to browser access — without that last header the browser
+   is refused before the request is sent, which surfaces as a bare "Load
+   failed" with no status code rather than a 401. */
+async function tagGarment(base64, apiKey) {
   let attempt = 0;
   let lastErr = null;
   while (attempt < 3) {
     try {
       const res = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: apiKey
+          ? {
+              "Content-Type": "application/json",
+              "x-api-key": apiKey,
+              "anthropic-version": "2023-06-01",
+              "anthropic-dangerous-direct-browser-access": "true",
+            }
+          : { "Content-Type": "application/json" },
         body: JSON.stringify({
           model: "claude-sonnet-4-6",
           max_tokens: 1000,
@@ -494,6 +510,9 @@ async function tagGarment(base64) {
       });
       if (res.status === 429 || res.status >= 500) {
         throw new Error("rate-limited");
+      }
+      if (res.status === 401) {
+        throw new Error("key rejected — check it is correct and has credit");
       }
       if (!res.ok) throw new Error("API returned " + res.status);
       const data = await res.json();
@@ -596,6 +615,8 @@ function TuesdayApp() {
   const [logOccasion, setLogOccasion] = useState(null);
   const [logSelected, setLogSelected] = useState([]);
   const [logQuery, setLogQuery] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  const [keySaved, setKeySaved] = useState(false);
   const [thumbChunks, setThumbChunks] = useState([]);
   const [thumbPart, setThumbPart] = useState(0);
   const [catFilter, setCatFilter] = useState("all");
@@ -655,6 +676,16 @@ function TuesdayApp() {
           /* no outfit history yet */
         }
 
+        try {
+          const r = await window.storage.get(APIKEY_KEY);
+          if (r && r.value) {
+            setApiKey(r.value);
+            setKeySaved(true);
+          }
+        } catch {
+          /* no key stored; the artifact runtime does not need one */
+        }
+
         const restored = await readQueue();
         if (restored.length) {
           setQueue(restored);
@@ -671,6 +702,21 @@ function TuesdayApp() {
   }, []);
 
   /* -------- ingest -------- */
+  const saveApiKey = async () => {
+    const v = apiKey.trim();
+    try {
+      if (v) {
+        await storageSet(APIKEY_KEY, v);
+        setKeySaved(true);
+      } else {
+        await window.storage.delete(APIKEY_KEY);
+        setKeySaved(false);
+      }
+    } catch (e) {
+      setStorageError("Could not save the key: " + e.message);
+    }
+  };
+
   const handleFiles = useCallback(async (files) => {
     const arr = Array.from(files);
     const prepared = [];
@@ -714,7 +760,7 @@ function TuesdayApp() {
       setQueue((q) => q.map((i) => (i.id === item.id ? { ...i, status: "tagging", error: null } : i)));
       try {
         const base64 = item.analysis.split(",")[1];
-        const tags = await tagGarment(base64);
+        const tags = await tagGarment(base64, apiKey);
         const clean = {
           name: String(tags.name || "Untitled").slice(0, 60),
           category: normalizeCategory(tags.category),
@@ -1993,6 +2039,34 @@ function TuesdayApp() {
               together — judging <em>statement</em> is more consistent when you can see
               twenty side by side.
             </p>
+
+            <div className="wc-card" style={{ display: "block", marginBottom: 18 }}>
+              <span className="wc-lab">Anthropic API key</span>
+              <input
+                className="wc-manual"
+                style={{ width: "100%", maxWidth: 480 }}
+                type="password"
+                autoComplete="off"
+                spellCheck="false"
+                placeholder={keySaved ? "saved on this device" : "sk-ant-…"}
+                value={apiKey}
+                onChange={(e) => {
+                  setApiKey(e.target.value);
+                  setKeySaved(false);
+                }}
+              />
+              <div className="wc-export-actions" style={{ marginTop: 10 }}>
+                <button className="wc-btn" onClick={saveApiKey}>
+                  {keySaved ? "Saved" : "Save key"}
+                </button>
+                <span className="wc-note">
+                  Needed only outside the Claude artifact, where no credentials are
+                  supplied. Held on this device and never in the repository. Get one at
+                  console.anthropic.com — it is billed separately from a Claude
+                  subscription.
+                </span>
+              </div>
+            </div>
             <div className="wc-drop">
               <input
                 ref={fileRef}
@@ -2068,6 +2142,9 @@ function TuesdayApp() {
                   <span className="wc-note">
                     One API call per photo, run in sequence. Failures are retried three
                     times and then shown, never silently dropped.
+                    {!apiKey && !keySaved
+                      ? " No key saved — this works inside the Claude artifact, and needs a key anywhere else."
+                      : ""}
                   </span>
                 </div>
               </>
