@@ -469,6 +469,68 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const APIKEY_KEY = "tuesday:apikey";
 
+/* Merging two copies of the wardrobe.
+
+   The two copies hold different fresh things: whichever one you have been
+   tagging in has current tags, whichever one you have been wearing from has
+   current history. So tags come from the incoming file, and wear history
+   never goes backwards on either side.
+
+   Deliberately max rather than sum on the counters: importing the same file
+   twice must not double anything. */
+function mergeGarment(existing, incoming) {
+  const wornLater =
+    (incoming.lastWorn || "") >= (existing.lastWorn || "") ? incoming : existing;
+  const declinedLater =
+    (incoming.lastDeclined || "") >= (existing.lastDeclined || "") ? incoming : existing;
+  return {
+    ...existing,
+    ...incoming,
+    lastWorn: wornLater.lastWorn || null,
+    lastWornOccasion: wornLater.lastWornOccasion || null,
+    timesWorn: Math.max(existing.timesWorn || 0, incoming.timesWorn || 0),
+    timesOffered: Math.max(existing.timesOffered || 0, incoming.timesOffered || 0),
+    timesDeclined: declinedLater.timesDeclined || 0,
+    lastDeclined: declinedLater.lastDeclined || null,
+    declinedOccasions: declinedLater.declinedOccasions || [],
+  };
+}
+
+function mergeGarments(existing, incoming) {
+  const byId = new Map(existing.map((g) => [g.id, g]));
+  let added = 0;
+  let updated = 0;
+  incoming.forEach((g) => {
+    if (byId.has(g.id)) {
+      byId.set(g.id, mergeGarment(byId.get(g.id), g));
+      updated += 1;
+    } else {
+      byId.set(g.id, g);
+      added += 1;
+    }
+  });
+  return { list: Array.from(byId.values()), added, updated };
+}
+
+/* Outfit records union by date and occasion, the same rule the manual log
+   uses, so a piece recorded on one device is never dropped by the other. */
+function mergeOutfits(existing, incoming) {
+  const key = (o) => o.date + "|" + o.occasion;
+  const byKey = new Map(existing.map((o) => [key(o), o]));
+  let added = 0;
+  incoming.forEach((o) => {
+    const k = key(o);
+    if (byKey.has(k)) {
+      const items = Array.from(new Set([...(byKey.get(k).items || []), ...(o.items || [])]));
+      byKey.set(k, { ...byKey.get(k), items });
+    } else {
+      byKey.set(k, o);
+      added += 1;
+    }
+  });
+  return { list: Array.from(byKey.values()), added };
+}
+
 /* Two runtimes, one call.
 
    Inside the Claude artifact the runtime injects credentials, so the request
@@ -943,7 +1005,7 @@ function TuesdayApp() {
   /* Accepts whatever an export produced, and works out which kind it is from
      the shape rather than asking. Catalogue must be loaded before photo parts,
      since thumbnail chunks are laid out to follow the garment order. */
-  const importPaste = async () => {
+  const importPaste = async (mode) => {
     let data;
     try {
       data = JSON.parse(exportText);
@@ -952,19 +1014,35 @@ function TuesdayApp() {
       return;
     }
     try {
-      if (Array.isArray(data)) {
-        await storageSet(GARMENTS_KEY, JSON.stringify(data));
-        setGarments(data);
-        setLastAction(`Imported ${data.length} garments.`);
-      } else if (Array.isArray(data.garments)) {
-        const outs = Array.isArray(data.outfits) ? data.outfits : [];
-        await storageSet(GARMENTS_KEY, JSON.stringify(data.garments));
-        await storageSet(OUTFITS_KEY, JSON.stringify(outs));
-        setGarments(data.garments);
-        setOutfits(outs);
-        setLastAction(
-          `Imported ${data.garments.length} garments and ${outs.length} outfit records. Photo parts next.`
-        );
+      const incomingGarments = Array.isArray(data)
+        ? data
+        : Array.isArray(data.garments)
+        ? data.garments
+        : null;
+
+      if (incomingGarments) {
+        const incomingOutfits = Array.isArray(data.outfits) ? data.outfits : [];
+        let nextGarments;
+        let nextOutfits;
+        let summary;
+
+        if (mode === "replace") {
+          nextGarments = incomingGarments;
+          nextOutfits = incomingOutfits;
+          summary = `Replaced everything with ${incomingGarments.length} garments and ${incomingOutfits.length} outfit records.`;
+        } else {
+          const g = mergeGarments(garments, incomingGarments);
+          const o = mergeOutfits(outfits, incomingOutfits);
+          nextGarments = g.list;
+          nextOutfits = o.list;
+          summary = `Merged: ${g.added} new, ${g.updated} updated, ${o.added} new outfit records. Nothing lost — tags came from the file, wear history kept whichever was later.`;
+        }
+
+        await storageSet(GARMENTS_KEY, JSON.stringify(nextGarments));
+        await storageSet(OUTFITS_KEY, JSON.stringify(nextOutfits));
+        setGarments(nextGarments);
+        setOutfits(nextOutfits);
+        setLastAction(summary);
       } else if (data.thumbs) {
         if (!garments.length) {
           setStorageError("Load the catalogue first — photo parts are filed against it.");
@@ -2563,8 +2641,14 @@ function TuesdayApp() {
             {exportMode === "import" ? (
               <p className="wc-note">
                 Paste a catalogue export or a photo part. The catalogue goes first —
-                photo parts are filed against it. A catalogue import replaces what is
-                here; photo parts merge.
+                photo parts are filed against it, and they always merge.
+                <br />
+                <br />
+                <strong>Merge</strong> is almost always what you want: tags come from
+                the pasted file, wear history keeps whichever side is later, and
+                garments missing from the file are left alone. Safe in either
+                direction. <strong>Replace</strong> is for restoring a backup onto an
+                empty or broken copy, and discards anything not in the file.
               </p>
             ) : exportMode === "thumbs" ? (
               <p className="wc-note">
@@ -2589,9 +2673,30 @@ function TuesdayApp() {
             />
             <div className="wc-export-actions">
               {exportMode === "import" ? (
-                <button className="wc-btn" disabled={!exportText.trim()} onClick={importPaste}>
-                  Load this
-                </button>
+                <>
+                  <button
+                    className="wc-btn"
+                    disabled={!exportText.trim()}
+                    onClick={() => importPaste("merge")}
+                  >
+                    Merge in
+                  </button>
+                  <button
+                    className="wc-btn wc-btn-ghost"
+                    disabled={!exportText.trim()}
+                    onClick={() => {
+                      if (
+                        window.confirm(
+                          "Replace everything here with the pasted file? Any wear history not in that file is lost."
+                        )
+                      ) {
+                        importPaste("replace");
+                      }
+                    }}
+                  >
+                    Replace instead
+                  </button>
+                </>
               ) : (
                 <button className="wc-btn" onClick={copyExport}>
                   {copyState === "copied" ? "Copied" : "Copy to clipboard"}
